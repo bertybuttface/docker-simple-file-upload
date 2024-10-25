@@ -4,16 +4,43 @@ const rateLimit = require('express-rate-limit');
 const path = require('path');
 const fs = require('fs');
 
-const fileSize = (process.env.FILESIZE || Infinity) * 1024 * 1024; // Convert FILESIZE from MB to bytes
+function createApp({ enableRateLimiter = true, fileSizeLimit = Infinity } = {}) {
+  const files = 1;
+  const abortOnLimit = true;
+  const safeFileNames = true;
+  const limits = { fileSize: fileSizeLimit, files };
+  const options = { safeFileNames, limits, abortOnLimit };
 
-const files = 1;
-const abortOnLimit = true;
-const safeFileNames = true;
-const limits = { fileSize, files };
-const options = { safeFileNames, limits, abortOnLimit };
+  const app = express();
+  app.use(fileUpload(options));
+
+  // Rate limiting middleware
+  const uploadLimiter = enableRateLimiter ? rateLimit({
+    windowMs: 15 * 60 * 1000, // 15 minutes
+    max: 10, // Limit each key to 10 upload requests per windowMs
+    message: 'Too many upload requests from this IP, please try again after 15 minutes'
+  }) : (req, res, next) => next();
+
+  const pageLimiter = enableRateLimiter ? rateLimit({
+    windowMs: 15 * 60 * 1000, // 15 minutes
+    max: 20, // Limit each IP to 20 requests to the main page per windowMs
+    message: 'Too many requests to the page, please try again later'
+  }) : (req, res, next) => next();
+
+  // Serve the HTML page with rate limiting
+  app.get('/', pageLimiter, (req, res) => {
+    res.sendFile(path.join(__dirname, 'index.html'));
+  });
+
+  // File upload route with rate limiting
+  app.post('/upload', uploadLimiter, handleUpload);
+  app.all('*', handleInvalidRequests);
+  app.use(handleError);
+
+  return app;
+}
 
 function isValidKey(key) {
-  // Ensure the key only contains valid characters
   return /^[a-zA-Z0-9_-]+$/.test(key);
 }
 
@@ -33,19 +60,6 @@ function validateEnvironmentKeys() {
 }
 
 validateEnvironmentKeys();
-
-// Rate limiting middleware
-const uploadLimiter = rateLimit({
-  windowMs: 15 * 60 * 1000, // 15 minutes
-  max: 10, // Limit each key to 10 upload requests per windowMs
-  message: 'Too many upload requests from this IP, please try again after 15 minutes'
-});
-
-const pageLimiter = rateLimit({
-  windowMs: 15 * 60 * 1000, // 15 minutes
-  max: 20, // Limit each IP to 20 requests to the main page per windowMs
-  message: 'Too many requests to the page, please try again later'
-});
 
 function handleUpload(req, res, next) {
   const notProvided = new Error('File not provided');
@@ -94,17 +108,4 @@ function handleError(err, req, res, next) {
   res.status(code).send(response);
 }
 
-const app = express();
-app.use(fileUpload(options));
-
-// Serve the HTML page with rate limiting
-app.get('/', pageLimiter, (req, res) => {
-  res.sendFile(path.join(__dirname, 'index.html'));
-});
-
-// File upload route with rate limiting
-app.post('/upload', uploadLimiter, handleUpload);
-app.all('*', handleInvalidRequests);
-app.use(handleError);
-
-module.exports = app;
+module.exports = createApp;

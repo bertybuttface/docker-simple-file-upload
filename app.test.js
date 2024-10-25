@@ -1,10 +1,17 @@
 const fs = require('fs');
 const request = require('supertest');
-const app = require('./app');
+const createApp = require('./app');
 
 describe('/upload', () => {
+  let app;
+
   beforeAll(() => {
     process.env['ALLOWED_UPLOAD_DIR'] = '/tmp';
+  });
+
+  beforeEach(() => {
+    // Create the app with rate limiting disabled by default
+    app = createApp({ enableRateLimiter: false });
   });
 
   afterAll(() => {
@@ -80,11 +87,13 @@ describe('/upload', () => {
   });
 
   test('it should rate limit excessive uploads', async () => {
+    // Create the app with rate limiting enabled for testing rate limits
+    app = createApp({ enableRateLimiter: true });
     process.env['KEY_TEST'] = '/tmp/AWEJA_testfile.txt';
     const name = 'test.txt';
     const file = Buffer.from('This is a test file', 'utf8');
     const url = '/upload?key=TEST';
-    
+
     // Send 10 requests (should pass)
     for (let i = 0; i < 10; i++) {
       const res = await request(app).post(url).attach('data', file, name);
@@ -99,9 +108,32 @@ describe('/upload', () => {
 
     delete process.env['KEY_TEST'];
   });
+
+  test('it should fail for file size too big', async () => {
+    process.env['KEY_TEST'] = '/tmp/AWEJA_largefile.txt';
+    
+    // Set file size limit to 1 MB by passing it to createApp
+    app = createApp({ enableRateLimiter: false, fileSizeLimit: 1 * 1024 * 1024 });
+  
+    const name = 'large.txt';
+    const largeFile = Buffer.alloc(1.5 * 1024 * 1024, 'a'); // Create a 2 MB file
+    const url = '/upload?key=TEST';
+    const res = await request(app).post(url).attach('data', largeFile, name);
+    expect(res.status).toEqual(413);
+    expect(res.text).toContain('File size limit has been reached');
+  
+    delete process.env['KEY_TEST'];
+  });
 });
 
 describe('GET /', () => {
+  let app;
+
+  beforeEach(() => {
+    // Create the app with rate limiting disabled by default
+    app = createApp({ enableRateLimiter: false });
+  });
+
   test('it should serve the index.html page', async () => {
     const res = await request(app).get('/');
     expect(res.status).toEqual(200);
@@ -109,6 +141,9 @@ describe('GET /', () => {
   });
 
   test('it should rate limit excessive page requests', async () => {
+    // Create the app with rate limiting enabled for testing rate limits
+    app = createApp({ enableRateLimiter: true });
+
     // Send 20 requests (should pass)
     for (let i = 0; i < 20; i++) {
       const res = await request(app).get('/');
