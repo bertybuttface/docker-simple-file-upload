@@ -22,4 +22,4 @@ jobs:
     - name: Build the Docker image
       run: docker build . --file Dockerfile --tag bertybuttface/simple-file-upload:latest
     - name: Push Docker image to Docker Hub
-      run: docker push simple-file-upload:latest
+      run: docker push bertybuttface/simple-file-upload:latest
