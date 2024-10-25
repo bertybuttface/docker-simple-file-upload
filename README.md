@@ -40,9 +40,9 @@ curl -XPOST -F 'data=@testuser-file.txt' dockerhost:3000/upload?key=TESTUSER
 
 #### Rate Limiting
 - `ENABLE_RATE_LIMITER`: Enable/disable rate limiting (default: true)
-- `UPLOAD_RATE_LIMIT_WINDOW_MS`: Time window for upload rate limiting in ms (default: 900000 - 15 minutes)
+- `UPLOAD_RATE_LIMIT_WINDOW_MINUTES`: Time window for upload rate limiting in minutes (default: 15 minutes)
 - `UPLOAD_RATE_LIMIT_MAX`: Maximum uploads per window (default: 10)
-- `PAGE_RATE_LIMIT_WINDOW_MS`: Time window for page access rate limiting in ms (default: 900000)
+- `PAGE_RATE_LIMIT_WINDOW_MINUTES`: Time window for page access rate limiting in minutes (default: 15 minutes)
 - `PAGE_RATE_LIMIT_MAX`: Maximum page accesses per window (default: 20)
 
 #### Logging
@@ -71,7 +71,7 @@ docker run \
   -e "ALLOWED_EXTENSIONS=txt,pdf,jpg" \
   -e "ALLOWED_MIME_TYPES=text/plain,application/pdf,image/jpeg" \
   -e "UPLOAD_RATE_LIMIT_MAX=5" \
-  -e "UPLOAD_RATE_LIMIT_WINDOW_MS=300000" \
+  -e "UPLOAD_RATE_LIMIT_WINDOW_MINUTES=15" \
   -v /my_local_dir/:/uploads/ \
   -p 3000:3000 \
   bertybuttface/simple-file-upload

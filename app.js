@@ -8,11 +8,11 @@ const fs = require('fs');
 const CONFIG = {
   RATE_LIMITS: {
     UPLOAD: {
-      windowMs: parseInt(process.env.UPLOAD_RATE_LIMIT_WINDOW_MS) || 15 * 60 * 1000,
+      windowMs: (parseInt(process.env.UPLOAD_RATE_LIMIT_WINDOW_MINUTES) || 15) * 60 * 1000, // Convert minutes to ms
       max: parseInt(process.env.UPLOAD_RATE_LIMIT_MAX) || 10
     },
     PAGE: {
-      windowMs: parseInt(process.env.PAGE_RATE_LIMIT_WINDOW_MS) || 15 * 60 * 1000,
+      windowMs: (parseInt(process.env.PAGE_RATE_LIMIT_WINDOW_MINUTES) || 15) * 60 * 1000, // Convert minutes to ms
       max: parseInt(process.env.PAGE_RATE_LIMIT_MAX) || 20
     }
   },
