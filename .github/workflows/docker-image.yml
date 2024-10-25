@@ -20,6 +20,6 @@ jobs:
         username: ${{ vars.DOCKERHUB_USERNAME }}
         password: ${{ secrets.DOCKERHUB_TOKEN }}
     - name: Build the Docker image
-      run: docker build . --file Dockerfile --tag simple-file-upload:latest
+      run: docker build . --file Dockerfile --tag bertybuttface/simple-file-upload:latest
     - name: Push Docker image to Docker Hub
       run: docker push simple-file-upload:latest
