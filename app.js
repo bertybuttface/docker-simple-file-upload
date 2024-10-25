@@ -4,108 +4,211 @@ const rateLimit = require('express-rate-limit');
 const path = require('path');
 const fs = require('fs');
 
-function createApp({ enableRateLimiter = true, fileSizeLimit = Infinity } = {}) {
-  const files = 1;
-  const abortOnLimit = true;
-  const safeFileNames = true;
-  const limits = { fileSize: fileSizeLimit, files };
-  const options = { safeFileNames, limits, abortOnLimit };
+// Environment variable configuration with defaults
+const CONFIG = {
+  RATE_LIMITS: {
+    UPLOAD: {
+      windowMs: parseInt(process.env.UPLOAD_RATE_LIMIT_WINDOW_MS) || 15 * 60 * 1000,
+      max: parseInt(process.env.UPLOAD_RATE_LIMIT_MAX) || 10
+    },
+    PAGE: {
+      windowMs: parseInt(process.env.PAGE_RATE_LIMIT_WINDOW_MS) || 15 * 60 * 1000,
+      max: parseInt(process.env.PAGE_RATE_LIMIT_MAX) || 20
+    }
+  },
+  UPLOAD: {
+    maxFiles: parseInt(process.env.MAX_FILES) || 1,
+    maxFileSize: process.env.MAX_FILE_SIZE ? parseInt(process.env.MAX_FILE_SIZE) * 1024 * 1024 : Infinity, // Convert MB to bytes
+    abortOnLimit: process.env.ABORT_ON_LIMIT !== 'false',
+    safeFileNames: process.env.SAFE_FILE_NAMES !== 'false',
+    allowedMimeTypes: process.env.ALLOWED_MIME_TYPES?.split(','),
+    allowedExtensions: process.env.ALLOWED_EXTENSIONS?.split(',')
+  },
+  LOGGING: {
+    enabled: process.env.LOGGING_ENABLED !== 'false'
+  }
+};
 
-  const app = express();
-  app.use(fileUpload(options));
-
-  // Rate limiting middleware
-  const uploadLimiter = enableRateLimiter ? rateLimit({
-    windowMs: 15 * 60 * 1000, // 15 minutes
-    max: 10, // Limit each key to 10 upload requests per windowMs
-    message: 'Too many upload requests from this IP, please try again after 15 minutes'
-  }) : (req, res, next) => next();
-
-  const pageLimiter = enableRateLimiter ? rateLimit({
-    windowMs: 15 * 60 * 1000, // 15 minutes
-    max: 20, // Limit each IP to 20 requests to the main page per windowMs
-    message: 'Too many requests to the page, please try again later'
-  }) : (req, res, next) => next();
-
-  // Serve the HTML page with rate limiting
-  app.get('/', pageLimiter, (req, res) => {
-    res.sendFile(path.join(__dirname, 'index.html'));
-  });
-
-  // File upload route with rate limiting
-  app.post('/upload', uploadLimiter, handleUpload);
-  app.all('*', handleInvalidRequests);
-  app.use(handleError);
-
-  return app;
+class CustomError extends Error {
+  constructor(message, statusCode) {
+    super(message);
+    this.name = this.constructor.name;
+    this.statusCode = statusCode;
+  }
 }
 
-function isValidKey(key) {
-  return /^[a-zA-Z0-9_-]+$/.test(key);
+class ValidationError extends CustomError {
+  constructor(message) {
+    super(message, 400);
+  }
 }
 
-// Validate environment keys on startup
-function validateEnvironmentKeys() {
-  for (const [key, value] of Object.entries(process.env)) {
-    if (key.startsWith('KEY_')) {
-      const keyValue = key.replace('KEY_', '');
-      if (!isValidKey(keyValue)) {
-        throw new Error(`Invalid environment key detected: ${key}`);
-      }
-      if (!value || !path.resolve(value).startsWith(process.env.ALLOWED_UPLOAD_DIR)) {
-        throw new Error(`Invalid path for environment key: ${key}`);
-      }
+class ServerError extends CustomError {
+  constructor(message = 'Internal server error') {
+    super(message, 500);
+  }
+}
+
+class FileValidator {
+  static validateMimeType(file) {
+    if (!CONFIG.UPLOAD.allowedMimeTypes) return true;
+    return CONFIG.UPLOAD.allowedMimeTypes.includes(file.mimetype);
+  }
+
+  static validateExtension(filename) {
+    if (!CONFIG.UPLOAD.allowedExtensions) return true;
+    const ext = path.extname(filename).toLowerCase().substring(1);
+    return CONFIG.UPLOAD.allowedExtensions.includes(ext);
+  }
+
+  static validateFile(file) {
+    if (!this.validateMimeType(file)) {
+      throw new ValidationError('Unsupported file type');
+    }
+    if (!this.validateExtension(file.name)) {
+      throw new ValidationError('Unsupported file extension');
     }
   }
 }
 
-validateEnvironmentKeys();
-
-function handleUpload(req, res, next) {
-  const notProvided = new Error('File not provided');
-  const invalidKey = new Error('Invalid key provided');
-
-  // Validate that the file and key are provided
-  if (!req.files || !req.files.data) return next(notProvided);
-  if (!req.query.key || !process.env['KEY_' + req.query.key]) return next(invalidKey);
-
-  // Sanitize and validate the key input to prevent any directory traversal attacks
-  const key = req.query.key.replace(/[^a-zA-Z0-9_-]/g, '');
-  if (!isValidKey(key) || !process.env['KEY_' + key]) {
-    return next(invalidKey);
+class FileUploadService {
+  static validateKey(key) {
+    return /^[a-zA-Z0-9_-]+$/.test(key);
   }
 
-  const uploadPath = process.env['KEY_' + key];
+  static validateEnvironmentKeys() {
+    for (const [key, value] of Object.entries(process.env)) {
+      if (!key.startsWith('KEY_')) continue;
 
-  // Ensure the destination directory is valid and inside allowed directories
-  if (!uploadPath || !path.resolve(uploadPath).startsWith(process.env.ALLOWED_UPLOAD_DIR)) {
-    return next(new Error('Invalid upload path'));
+      const keyValue = key.replace('KEY_', '');
+      if (!this.validateKey(keyValue)) {
+        throw new ValidationError(`Invalid environment key detected: ${key}`);
+      }
+
+      if (!value || !path.resolve(value).startsWith(process.env.ALLOWED_UPLOAD_DIR)) {
+        throw new ValidationError(`Invalid path for environment key: ${key}`);
+      }
+    }
   }
 
-  // Overwrite the file in the target directory securely
-  const newFilePath = path.join(uploadPath);
+  static getValidatedKey(key) {
+    if (!key || !process.env[`KEY_${key}`]) {
+      throw new ValidationError('Invalid key provided');
+    }
 
-  // Move the file to the target directory securely
-  req.files.data.mv(newFilePath, (err) => {
-    if (err) return next(err);
-    console.log(`[${req.ip}] [201] Upload successful for ${key}`);
-    res.status(201).send('Upload successful');
+    const sanitizedKey = key.replace(/[^a-zA-Z0-9_-]/g, '');
+    if (!this.validateKey(sanitizedKey)) {
+      throw new ValidationError('Invalid key format');
+    }
+
+    return sanitizedKey;
+  }
+
+  static getValidatedPath(key) {
+    const uploadPath = process.env[`KEY_${key}`];
+    const resolvedPath = path.resolve(uploadPath);
+
+    if (!uploadPath || !resolvedPath.startsWith(process.env.ALLOWED_UPLOAD_DIR)) {
+      throw new ValidationError('Invalid upload path');
+    }
+
+    return path.join(uploadPath);
+  }
+
+  static async handleUpload(req, res, next) {
+    try {
+      if (!req.files?.data) {
+        throw new ValidationError('File not provided');
+      }
+
+      FileValidator.validateFile(req.files.data);
+      
+      const key = this.getValidatedKey(req.query.key);
+      const uploadPath = this.getValidatedPath(key);
+      
+      try {
+        await req.files.data.mv(uploadPath);
+      } catch (error) {
+        next(new ServerError('File operation failed'));
+        return;
+      }
+      
+      req.logger.info(`Upload successful for ${key}`);
+      return res.status(201).send('Upload successful');
+    } catch (error) {
+      next(error);
+    }
+  }
+}
+
+const createLogger = (req, res, next) => {
+  if (!CONFIG.LOGGING.enabled) {
+    req.logger = { info: () => {}, error: () => {} };
+    return next();
+  }
+
+  req.logger = {
+    info: (message) => console.log(`[${req.ip}] [201] ${message}`),
+    error: (message, code) => console.log(`[${req.ip}] [${code}] Upload failed with: ${message}`)
+  };
+  next();
+};
+
+const errorHandler = (err, req, res, next) => {
+  const statusCode = err.statusCode || 500;
+  let message = err instanceof CustomError ? err.message : 'Could not process upload';
+  
+  req.logger.error(err.message, statusCode);
+  res.status(statusCode).send(message);
+};
+
+function createApp({ 
+  enableRateLimiter = process.env.ENABLE_RATE_LIMITER !== 'false',
+  fileSizeLimit = CONFIG.UPLOAD.maxFileSize
+} = {}) {
+  FileUploadService.validateEnvironmentKeys();
+
+  const app = express();
+  app.use(createLogger);
+  
+  app.use(fileUpload({
+    limits: {
+      fileSize: fileSizeLimit,
+      files: CONFIG.UPLOAD.maxFiles
+    },
+    abortOnLimit: CONFIG.UPLOAD.abortOnLimit,
+    safeFileNames: CONFIG.UPLOAD.safeFileNames
+  }));
+
+  const createLimiter = (config) => enableRateLimiter 
+    ? rateLimit({
+        windowMs: config.windowMs,
+        max: config.max,
+        message: 'Too many requests, please try again later'
+      }) 
+    : (req, res, next) => next();
+
+  app.get('/', createLimiter(CONFIG.RATE_LIMITS.PAGE), (req, res) => {
+    res.sendFile(path.join(__dirname, 'index.html'));
   });
+
+  app.post('/upload', createLimiter(CONFIG.RATE_LIMITS.UPLOAD), FileUploadService.handleUpload.bind(FileUploadService));
+
+  app.all('*', (req, res, next) => {
+    next(new ValidationError('That request is not supported'));
+  });
+
+  app.use(errorHandler);
+
+  return app;
 }
 
-function handleInvalidRequests(req, res) {
-  throw new Error('That request is not supported');
-}
-
-function handleError(err, req, res, next) {
-  const code =
-    err.message == 'File not provided' ||
-    err.message == 'Invalid key provided' ||
-    err.message == 'That request is not supported' ||
-    err.message == 'Invalid upload path' ? 400 : 500;
-  const response = code == 400 ? err.message : 'Could not process upload';
-  console.log(`[${req.ip}] [${code}] Upload failed with: ${err.message}`);
-  res.status(code).send(response);
-}
-
-module.exports = createApp;
+module.exports = {
+  FileUploadService,
+  createApp,
+  ValidationError,
+  ServerError,
+  createLogger,
+  errorHandler,
+  CONFIG
+};
