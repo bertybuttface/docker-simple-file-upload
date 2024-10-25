@@ -1,5 +1,6 @@
 const express = require('express')
 const fileUpload = require('express-fileupload')
+const path = require('path')
 
 const fileSize = process.env.FILESIZE || Infinity
 
@@ -38,6 +39,13 @@ function handleError(err, req, res, next) {
 
 const app = express()
 app.use(fileUpload(options))
+
+// Serve the HTML page
+app.get('/', (req, res) => {
+  res.sendFile(path.join(__dirname, 'index.html'))
+})
+
+// File upload route
 app.post('/upload', handleUpload)
 app.post('/upload', handleSuccess)
 app.all('*', handleInvalidRequests)
