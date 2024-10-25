@@ -25,7 +25,7 @@ jobs:
   build:
     needs: test
     runs-on: ubuntu-latest
-    if: github.event_name == 'push' || github.event_name == 'release'
+    if: github.event_name == 'release'
     steps:
       - uses: actions/checkout@v4
       - name: Login to Docker Hub
@@ -35,11 +35,11 @@ jobs:
           password: ${{ secrets.DOCKERHUB_TOKEN }}
       - name: Build the Docker image
         run: |
-          VERSION_TAG="${{ github.event_name == 'release' && github.event.release.tag_name || 'latest' }}"
+          VERSION_TAG="${{ github.event.release.tag_name }}"
           docker build . --file Dockerfile --tag bertybuttface/simple-file-upload:${VERSION_TAG}
           docker tag bertybuttface/simple-file-upload:${VERSION_TAG} bertybuttface/simple-file-upload:latest
       - name: Push Docker image to Docker Hub
         run: |
-          VERSION_TAG="${{ github.event_name == 'release' && github.event.release.tag_name || 'latest' }}"
+          VERSION_TAG="${{ github.event.release.tag_name }}"
           docker push bertybuttface/simple-file-upload:${VERSION_TAG}
           docker push bertybuttface/simple-file-upload:latest
